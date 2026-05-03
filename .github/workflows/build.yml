@@ -83,6 +83,9 @@ jobs:
           keep_history: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fix latest.json format
+        run: |
+          sed -i 's/}[0-9]\+$/}/' classroom/latest.json
       - name: Upload score
         run: |
           cat classroom/latest.json
