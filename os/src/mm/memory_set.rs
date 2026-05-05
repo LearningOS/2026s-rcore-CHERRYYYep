@@ -262,6 +262,24 @@ impl MemorySet {
             false
         }
     }
+
+    /// Remove an existing framed user area exactly matched by [start_va, end_va).
+    pub fn remove_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        if let Some(idx) = self.areas.iter().position(|area| {
+            area.map_type == MapType::Framed
+                && area.map_perm.contains(MapPermission::U)
+                && area.vpn_range.get_start() == start_vpn
+                && area.vpn_range.get_end() == end_vpn
+        }) {
+            let mut area = self.areas.remove(idx);
+            area.unmap(&mut self.page_table);
+            true
+        } else {
+            false
+        }
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {

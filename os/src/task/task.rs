@@ -1,6 +1,6 @@
 //! Types related to task management
 use super::TaskContext;
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{MAX_SYSCALL_NUM, TRAP_CONTEXT_BASE};
 use crate::mm::{
     kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
@@ -28,6 +28,9 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Per-task syscall counters indexed by syscall id
+    pub syscall_times: [usize; MAX_SYSCALL_NUM],
 }
 
 impl TaskControlBlock {
@@ -63,6 +66,7 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            syscall_times: [0; MAX_SYSCALL_NUM],
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -94,6 +98,50 @@ impl TaskControlBlock {
             Some(old_break)
         } else {
             None
+        }
+    }
+
+    /// Map a user framed area into current task address space.
+    pub fn mmap(&mut self, start: usize, len: usize, permission: MapPermission) -> bool {
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(start + len);
+        let mut vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        while vpn < end_vpn {
+            if self
+                .memory_set
+                .translate(vpn)
+                .map(|pte| pte.is_valid())
+                .unwrap_or(false)
+            {
+                return false;
+            }
+            vpn.0 += 1;
+        }
+        self.memory_set.insert_framed_area(start_va, end_va, permission);
+        true
+    }
+
+    /// Unmap an existing user framed area exactly matched by [start, start + len).
+    pub fn munmap(&mut self, start: usize, len: usize) -> bool {
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(start + len);
+        self.memory_set.remove_framed_area(start_va, end_va)
+    }
+
+    /// Record one syscall invocation for the task.
+    pub fn record_syscall(&mut self, syscall_id: usize) {
+        if syscall_id < MAX_SYSCALL_NUM {
+            self.syscall_times[syscall_id] += 1;
+        }
+    }
+
+    /// Query the syscall invocation count for the task.
+    pub fn syscall_count(&self, syscall_id: usize) -> usize {
+        if syscall_id < MAX_SYSCALL_NUM {
+            self.syscall_times[syscall_id]
+        } else {
+            0
         }
     }
 }
