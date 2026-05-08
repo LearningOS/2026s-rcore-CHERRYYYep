@@ -72,6 +72,23 @@ impl MemorySet {
             self.areas.remove(idx);
         }
     }
+    /// Remove a user framed area by exact virtual address range.
+    pub fn remove_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        if let Some((idx, area)) = self.areas.iter_mut().enumerate().find(|(_, area)| {
+            area.vpn_range.get_start() == start_vpn
+                && area.vpn_range.get_end() == end_vpn
+                && area.map_type == MapType::Framed
+                && area.map_perm.contains(MapPermission::U)
+        }) {
+            area.unmap(&mut self.page_table);
+            self.areas.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
     /// Add a new MapArea into this MemorySet.
     /// Assuming that there are no conflicts in the virtual address
     /// space.

@@ -35,6 +35,41 @@ pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
     Processor,
 };
+
+/// Record one syscall for the current running task.
+pub fn record_current_syscall(syscall_id: usize) {
+    if let Some(task) = current_task() {
+        task.record_syscall(syscall_id);
+    }
+}
+
+/// Query how many times the current task has invoked `syscall_id`.
+pub fn current_syscall_count(syscall_id: usize) -> isize {
+    current_task()
+        .map(|task| task.syscall_count(syscall_id))
+        .unwrap_or(-1)
+}
+
+/// Map a user area in current task.
+pub fn mmap_current(start: usize, len: usize, permission: crate::mm::MapPermission) -> isize {
+    current_task()
+        .map(|task| task.mmap(start, len, permission))
+        .unwrap_or(-1)
+}
+
+/// Unmap a user area in current task.
+pub fn munmap_current(start: usize, len: usize) -> isize {
+    current_task()
+        .map(|task| task.munmap(start, len))
+        .unwrap_or(-1)
+}
+
+/// Set current task priority for stride scheduler.
+pub fn set_current_priority(prio: isize) -> isize {
+    current_task()
+        .map(|task| task.set_priority(prio))
+        .unwrap_or(-1)
+}
 /// Suspend the current 'Running' task and run the next task in task list.
 pub fn suspend_current_and_run_next() {
     // There must be an application running.

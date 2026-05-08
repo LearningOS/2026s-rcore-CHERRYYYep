@@ -9,7 +9,12 @@ pub struct TaskManager {
     ready_queue: VecDeque<Arc<TaskControlBlock>>,
 }
 
-/// A simple FIFO scheduler.
+/// Compare stride values under wrapping arithmetic.
+fn stride_less(lhs: usize, rhs: usize) -> bool {
+    lhs != rhs && lhs.wrapping_sub(rhs) > usize::MAX / 2
+}
+
+/// A stride scheduler.
 impl TaskManager {
     ///Creat an empty TaskManager
     pub fn new() -> Self {
@@ -21,9 +26,29 @@ impl TaskManager {
     pub fn add(&mut self, task: Arc<TaskControlBlock>) {
         self.ready_queue.push_back(task);
     }
-    /// Take a process out of the ready queue
+    /// Take a process out of the ready queue.
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        if self.ready_queue.is_empty() {
+            return None;
+        }
+        let mut best_idx = 0usize;
+        let mut best_stride = self.ready_queue[0].stride();
+        let mut best_pid = self.ready_queue[0].getpid();
+        for i in 1..self.ready_queue.len() {
+            let task = &self.ready_queue[i];
+            let task_stride = task.stride();
+            let task_pid = task.getpid();
+            if stride_less(task_stride, best_stride)
+                || (task_stride == best_stride && task_pid < best_pid)
+            {
+                best_idx = i;
+                best_stride = task_stride;
+                best_pid = task_pid;
+            }
+        }
+        let task = self.ready_queue.remove(best_idx).unwrap();
+        task.advance_stride();
+        Some(task)
     }
 }
 
