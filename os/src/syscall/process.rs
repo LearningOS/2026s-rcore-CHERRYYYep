@@ -20,6 +20,23 @@ pub struct TimeVal {
     pub usec: usize,
 }
 
+fn normalize_app_name(path: &str) -> Option<&str> {
+    let trimmed = path.trim_matches('\0').trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let base = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    let end = base
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+        .unwrap_or(base.len());
+    let normalized = &base[..end];
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
 fn current_task_user_pte(va: usize) -> Option<PageTableEntry> {
     let task = current_task()?;
     let inner = task.inner_exclusive_access();
@@ -114,8 +131,11 @@ pub fn sys_fork() -> isize {
 pub fn sys_exec(path: *const u8) -> isize {
     trace!("kernel:pid[{}] sys_exec", current_task().unwrap().pid.0);
     let token = current_user_token();
-    let path = translated_str(token, path);
-    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+    let path_raw = translated_str(token, path);
+    let Some(path) = normalize_app_name(path_raw.as_str()) else {
+        return -1;
+    };
+    if let Some(app_inode) = open_file(path, OpenFlags::RDONLY) {
         let all_data = app_inode.read_all();
         let task = current_task().unwrap();
         task.exec(all_data.as_slice());
@@ -265,8 +285,18 @@ pub fn sys_sbrk(size: i32) -> isize {
 /// HINT: fork + exec =/= spawn
 pub fn sys_spawn(path: *const u8) -> isize {
     let token = current_user_token();
-    let path = translated_str(token, path);
-    let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) else {
+    let path_raw = translated_str(token, path);
+    let Some(path) = normalize_app_name(path_raw.as_str()) else {
+        return -1;
+    };
+    let Some(app_inode) = open_file(path, OpenFlags::RDONLY) else {
+        warn!(
+            "kernel:pid[{}] sys_spawn open_file failed: raw={}, normalized={}",
+            current_task().unwrap().pid.0,
+            path_raw.as_str(),
+            path,
+        );
+        crate::fs::list_apps();
         return -1;
     };
     let all_data = app_inode.read_all();
