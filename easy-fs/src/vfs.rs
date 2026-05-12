@@ -56,8 +56,9 @@ impl Inode {
     }
     /// Find inode under a disk inode by name
     fn find_inode_id(&self, name: &str, disk_inode: &DiskInode) -> Option<u32> {
-        // assert it is a directory
-        assert!(disk_inode.is_dir());
+        if !disk_inode.is_dir() {
+            return None;
+        }
         let file_count = (disk_inode.size as usize) / DIRENT_SZ;
         let mut dirent = DirEntry::empty();
         for i in 0..file_count {
@@ -154,7 +155,7 @@ impl Inode {
 
     /// Create a hard link `new_name` to existing file `old_name` under current directory.
     pub fn link(&self, old_name: &str, new_name: &str) -> isize {
-        if old_name == new_name {
+        if old_name.is_empty() || new_name.is_empty() || old_name == new_name {
             return -1;
         }
         let mut fs = self.fs.lock();
@@ -185,6 +186,9 @@ impl Inode {
     /// Unlink a file entry by name under current directory.
     /// If this is the last hard link, recycle its data blocks and inode.
     pub fn unlink(&self, name: &str) -> isize {
+        if name.is_empty() {
+            return -1;
+        }
         let mut fs = self.fs.lock();
         let Some((target_index, target_inode_id)) = self.read_disk_inode(|root_inode| {
             assert!(root_inode.is_dir());
@@ -213,6 +217,9 @@ impl Inode {
                 &self.block_device,
             );
         });
+        if target_inode_id == 0 {
+            return -1;
+        }
         let (inode_block_id, inode_block_offset) = fs.get_disk_inode_pos(target_inode_id);
         let mut should_recycle = false;
         get_block_cache(inode_block_id as usize, Arc::clone(&self.block_device))
