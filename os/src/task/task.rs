@@ -3,13 +3,22 @@ use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::fs::{File, Stdin, Stdout};
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::mm::{MapPermission, MemorySet, PhysPageNum, VirtAddr, VirtPageNum, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
+
+/// Upper bound of syscall id tracked in each task.
+pub const MAX_SYSCALL_NUM: usize = 500;
+/// The minimal valid process priority for stride scheduling.
+pub const MIN_STRIDE_PRIORITY: usize = 2;
+/// Default process priority.
+pub const DEFAULT_STRIDE_PRIORITY: usize = 16;
+/// A large constant used by stride scheduler.
+pub const BIG_STRIDE: usize = 65_536;
 
 /// Task control block structure
 ///
@@ -71,6 +80,15 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Number of invocations per syscall id in this task.
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+
+    /// Current stride value used by scheduler.
+    pub stride: usize,
+
+    /// Current process priority used by scheduler.
+    pub priority: usize,
 }
 
 impl TaskControlBlockInner {
@@ -135,6 +153,9 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    stride: 0,
+                    priority: DEFAULT_STRIDE_PRIORITY,
                 })
             },
         };
@@ -216,6 +237,9 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    stride: 0,
+                    priority: DEFAULT_STRIDE_PRIORITY,
                 })
             },
         });
@@ -260,6 +284,82 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// Record one syscall invocation by id.
+    pub fn record_syscall(&self, syscall_id: usize) {
+        if syscall_id >= MAX_SYSCALL_NUM {
+            return;
+        }
+        let mut inner = self.inner_exclusive_access();
+        inner.syscall_times[syscall_id] = inner.syscall_times[syscall_id].saturating_add(1);
+    }
+
+    /// Get current syscall invocation count for syscall id.
+    pub fn syscall_count(&self, syscall_id: usize) -> isize {
+        if syscall_id >= MAX_SYSCALL_NUM {
+            return -1;
+        }
+        let inner = self.inner_exclusive_access();
+        inner.syscall_times[syscall_id] as isize
+    }
+
+    /// Map a new user framed area.
+    pub fn mmap(&self, start: usize, len: usize, permission: MapPermission) -> isize {
+        let mut inner = self.inner_exclusive_access();
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(start + len);
+        let mut vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        while vpn < end_vpn {
+            if inner
+                .memory_set
+                .translate(vpn)
+                .map(|pte| pte.is_valid())
+                .unwrap_or(false)
+            {
+                return -1;
+            }
+            vpn = VirtPageNum(vpn.0 + 1);
+        }
+        inner.memory_set.insert_framed_area(start_va, end_va, permission);
+        0
+    }
+
+    /// Unmap an existing user framed area.
+    pub fn munmap(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.inner_exclusive_access();
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(start + len);
+        if inner.memory_set.remove_framed_area(start_va, end_va) {
+            0
+        } else {
+            -1
+        }
+    }
+
+    /// Get current stride value.
+    pub fn stride(&self) -> usize {
+        let inner = self.inner_exclusive_access();
+        inner.stride
+    }
+
+    /// Increase current stride by stride pass derived from priority.
+    pub fn advance_stride(&self) {
+        let mut inner = self.inner_exclusive_access();
+        let pass = BIG_STRIDE / inner.priority;
+        inner.stride = inner.stride.wrapping_add(pass.max(1));
+    }
+
+    /// Set current task priority for stride scheduling.
+    /// Returns `prio` when valid, otherwise returns `-1`.
+    pub fn set_priority(&self, prio: isize) -> isize {
+        if prio < MIN_STRIDE_PRIORITY as isize {
+            return -1;
+        }
+        let mut inner = self.inner_exclusive_access();
+        inner.priority = prio as usize;
+        prio
     }
 }
 

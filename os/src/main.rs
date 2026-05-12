@@ -38,6 +38,7 @@ pub mod config;
 pub mod drivers;
 pub mod fs;
 pub mod lang_items;
+pub mod loader;
 pub mod logging;
 pub mod mm;
 pub mod sbi;
@@ -50,6 +51,7 @@ pub mod trap;
 use core::arch::global_asm;
 
 global_asm!(include_str!("entry.asm"));
+global_asm!(include_str!("link_app.S"));
 /// clear BSS segment
 fn clear_bss() {
     extern "C" {
